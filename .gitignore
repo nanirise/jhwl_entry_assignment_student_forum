@@ -1,0 +1,25 @@
+# ---- 编译产物（Go 编译生成的程序，随时能重新生成）----
+*.exe
+*.exe~
+*.out
+*.test
+*.test.exe
+forum
+
+# ---- 本地配置（可能含密码/密钥，绝不上传！）----
+.env
+config.local.yaml
+config.local.yml
+
+# ---- 日志 ----
+*.log
+
+# ---- 编辑器/系统杂项 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- 教学/资料文档（不属于作品，不上传）----
+CLAUDE.md
+文档/
