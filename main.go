@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"forum/handler"
+	"forum/middleware"
 	"forum/models"
 	"forum/response"
 	"forum/store"
@@ -62,6 +63,17 @@ func main() {
 
 	// 把"注册"这道菜写进菜单：POST /api/v1/auth/register
 	r.POST("/api/v1/auth/register", authHandler.Register)
+
+	// 把"登录"这道菜写进菜单：POST /api/v1/auth/login
+	r.POST("/api/v1/auth/login", authHandler.Login)
+
+	// 受保护的一组接口：站在这条"走廊"前的是安检门(鉴权中间件)
+	// 后面的接口都会先通过 middleware.Auth() 验 JWT 手环
+	protected := r.Group("/api/v1", middleware.Auth())
+	{
+		// 需登录才能访问：返回当前登录用户的信息
+		protected.GET("/auth/me", authHandler.Me)
+	}
 
 	// 正式营业：守在 8080 号门
 	r.Run(":8080")

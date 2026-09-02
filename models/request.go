@@ -8,3 +8,10 @@ type RegisterRequest struct {
 	Password string `json:"password" binding:"required"`                     // 密码，8~16位
 	Role     string `json:"role"     binding:"required,oneof=student admin"` // 角色：student / admin
 }
+
+// LoginRequest 登录请求体：顾客报"账号 + 密码"
+// 登录时不需要 role，角色由服务器从库里查出
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"` // 学号/工号
+	Password string `json:"password" binding:"required"` // 密码
+}

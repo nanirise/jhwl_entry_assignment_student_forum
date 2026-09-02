@@ -36,6 +36,20 @@ func (s *Store) GetUserByUsername(username string) *models.User {
 	return s.users[username]
 }
 
+// GetUserByID 按用户 ID 查找用户；不存在返回 nil
+// 因为 map 是按 username 存的，所以这里需要遍历找出 ID 匹配的用户
+func (s *Store) GetUserByID(id int64) *models.User {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 遍历 map 里所有用户，找到 ID 匹配的那一个
+	for _, u := range s.users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil // 没找到
+}
+
 // CreateUser 创建一个新用户，返回创建好的用户（含分配好的 ID 和哈希后的密码）
 // 如果用户名已存在，返回错误
 func (s *Store) CreateUser(u *models.User) (*models.User, error) {
