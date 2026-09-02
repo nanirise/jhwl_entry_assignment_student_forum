@@ -20,7 +20,7 @@ config.local.yml
 .DS_Store
 Thumbs.db
 
-# ---- 本地自用资料（不属于作品，不上传）----
+# ---- 本地资料（不属于作品，不上传）----
 CLAUDE.md
 文档/
 notes.md
