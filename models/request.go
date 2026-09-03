@@ -15,3 +15,13 @@ type LoginRequest struct {
 	Username string `json:"username" binding:"required"` // 学号/工号
 	Password string `json:"password" binding:"required"` // 密码
 }
+
+// CreatePostRequest 发布帖子请求体：只允许从请求体传 content，禁止传 user_id
+type CreatePostRequest struct {
+	Content string `json:"content" binding:"required,min=1,max=2000"`
+}
+
+// CreateCommentRequest 发表评论请求体
+type CreateCommentRequest struct {
+	Content string `json:"content" binding:"required,min=1,max=1000"`
+}

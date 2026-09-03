@@ -48,6 +48,7 @@ func main() {
 		post := models.Post{
 			ID:           20001,
 			Content:      "欢迎报名技术部暑假招新",
+			Author:       &models.User{ID: 10001, Username: "20260001", Name: "张三", Role: "student"},
 			LikeCount:    12,
 			CommentCount: 3,
 			CreatedAt:    "2026-07-12T10:00:00+08:00",
@@ -60,6 +61,8 @@ func main() {
 
 	// 创建"前台领班"（鉴权处理器），并把仓库交给他
 	authHandler := handler.NewAuthHandler(myStore)
+	// 创建"帖子管家"（帖子/评论处理器）
+	postHandler := handler.NewPostHandler(myStore)
 
 	// 把"注册"这道菜写进菜单：POST /api/v1/auth/register
 	r.POST("/api/v1/auth/register", authHandler.Register)
@@ -73,6 +76,12 @@ func main() {
 	{
 		// 需登录才能访问：返回当前登录用户的信息
 		protected.GET("/auth/me", authHandler.Me)
+
+		// 帖子相关：发帖、列表、详情、发评论
+		protected.POST("/posts", postHandler.Create)
+		protected.GET("/posts", postHandler.List)
+		protected.GET("/posts/:post_id", postHandler.Get)
+		protected.POST("/posts/:post_id/comment", postHandler.CreateComment)
 	}
 
 	// 正式营业：守在 8080 号门
