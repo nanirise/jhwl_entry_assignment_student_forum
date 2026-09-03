@@ -28,6 +28,10 @@ type Store struct {
 	// 下一个评论 ID，从 30001 开始（文档示例评论 ID 是这个）
 	commentSeq int64
 
+	// 点赞货架：钥匙是用户 ID，值是"这个用户点过哪些帖子"的小字典
+	// 相当于：谁(用户ID) → {哪个帖(帖子ID) → 赞没赞}
+	likes map[int64]map[int64]bool
+
 	// 互斥锁：防止多人同时操作导致数据冲突（类比"同一个人不能同时拿两份"）
 	mu sync.Mutex
 }
@@ -43,6 +47,8 @@ func New() *Store {
 
 		comments:   make(map[int64][]*models.Comment),
 		commentSeq: 30000, // 评论 ID 从 30001 开始
+
+		likes: make(map[int64]map[int64]bool), // 点赞货架一开始是空的
 	}
 }
 
@@ -184,4 +190,73 @@ func (s *Store) GetCommentsByPostID(postID int64) []*models.Comment {
 	r := make([]*models.Comment, len(list))
 	copy(r, list)
 	return r
+}
+
+// ToggleLike 点赞开关：原本没赞 → 点赞，原本赞了 → 取消
+// 返回：(切换后的点赞状态, 错误)。帖子不存在时报错（调用方据此返回 404）
+func (s *Store) ToggleLike(userID, postID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 帖子不在，直接报错，别点了再发现点了个寂寞
+	if s.posts[postID] == nil {
+		return false, fmt.Errorf("帖子不存在")
+	}
+
+	// 如果这个用户还没有自己的"点赞字典"，先给他开一个空字典
+	if s.likes[userID] == nil {
+		s.likes[userID] = make(map[int64]bool)
+	}
+
+	// 取出当前状态：这个用户现在赞没赞这个帖
+	current := s.likes[userID][postID]
+	// 取反：false→true(现在赞了)，true→false(现在取消了)
+	s.likes[userID][postID] = !current
+
+	// 把帖子上贴的那个"点赞数"同步一下：之前没赞→现在赞了，+1；之前赞了→现在取消，-1
+	if !current {
+		s.posts[postID].LikeCount++
+	} else {
+		s.posts[postID].LikeCount--
+	}
+
+	return !current, nil
+}
+
+// GetLikeStatus 批量查"当前用户对一堆帖子"的点赞状态
+// 返回切片，每项 = {帖子ID, 赞没赞}；没赞或帖子不存在都记 false
+func (s *Store) GetLikeStatus(userID int64, postIDs []int64) []models.LikeStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := make([]models.LikeStatus, 0, len(postIDs))
+	for _, pid := range postIDs {
+		liked := false
+		// 只有用户的点赞字典里真的记着这个帖，才算赞了
+		if m, ok := s.likes[userID]; ok {
+			liked = m[pid]
+		}
+		result = append(result, models.LikeStatus{PostID: pid, Liked: liked})
+	}
+	return result
+}
+
+// DeletePost 删除帖子：帖子本身 + 它的评论 + 所有用户对它的点赞，一次性全删（级联删）
+func (s *Store) DeletePost(postID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.posts[postID] == nil {
+		return fmt.Errorf("帖子不存在")
+	}
+
+	delete(s.posts, postID)    // 删掉帖子卡片本身
+	delete(s.comments, postID) // 级联：删掉它下面这一整列评论
+
+	// 级联：遍历所有用户的点赞字典，把这个帖子的点赞记录也一并删掉
+	for _, userLikes := range s.likes {
+		delete(userLikes, postID)
+	}
+
+	return nil
 }

@@ -63,6 +63,10 @@ func main() {
 	authHandler := handler.NewAuthHandler(myStore)
 	// 创建"帖子管家"（帖子/评论处理器）
 	postHandler := handler.NewPostHandler(myStore)
+	// 创建"点赞管家"（点赞/批量状态处理器）
+	likeHandler := handler.NewLikeHandler(myStore)
+	// 创建"管理员管家"（管理员专属处理器）
+	adminHandler := handler.NewAdminHandler(myStore)
 
 	// 把"注册"这道菜写进菜单：POST /api/v1/auth/register
 	r.POST("/api/v1/auth/register", authHandler.Register)
@@ -82,6 +86,18 @@ func main() {
 		protected.GET("/posts", postHandler.List)
 		protected.GET("/posts/:post_id", postHandler.Get)
 		protected.POST("/posts/:post_id/comment", postHandler.CreateComment)
+
+		// ⑥ 删除自己的帖子
+		protected.DELETE("/posts/:post_id", postHandler.Delete)
+
+		// ⑧ 点赞/取消点赞（开关）
+		protected.POST("/posts/:post_id/like", likeHandler.Like)
+
+		// ⑩ 批量查询当前用户对多个帖子的点赞状态
+		protected.POST("/posts/likes", likeHandler.GetLikeStatus)
+
+		// ⑦ 管理员删除任意帖子
+		protected.DELETE("/admin/posts/:post_id", adminHandler.DeletePost)
 	}
 
 	// 正式营业：守在 8080 号门
