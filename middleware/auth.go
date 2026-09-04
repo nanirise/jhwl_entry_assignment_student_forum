@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,8 @@ func Auth() gin.HandlerFunc {
 		// 3. 用 ParseToken 验证手环真伪与是否过期
 		userID, role, err := jwt.ParseToken(tokenString)
 		if err != nil {
+			// 记录拒绝原因（过期/伪造/格式不对），方便排查"为什么是 401"
+			log.Println("鉴权-令牌校验失败:", err)
 			response.Error(c, response.StatusUnauthorized, "未登录或令牌无效")
 			c.Abort()
 			return

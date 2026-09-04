@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"log"
 
 	"forum/models"
 	"gorm.io/gorm"
@@ -56,6 +57,8 @@ func (s *Store) CreateUser(u *models.User) (*models.User, error) {
 
 	// 3. Create = 插入一行；Gorm 自动把 ID、CreatedAt、UpdatedAt 填进 g
 	if err := s.db.Create(&g).Error; err != nil {
+		// 走到这里往往不是"重名"(重名已被上面的 Count 拦下)，多是数据库故障；记下真实原因
+		log.Println("创建用户写入失败(多为数据库故障):", err)
 		return nil, err
 	}
 	return toUser(&g), nil
@@ -68,6 +71,7 @@ func (s *Store) CreatePost(content string, author *models.User) *models.Post {
 		AuthorID: author.ID,
 	}
 	if err := s.db.Create(&g).Error; err != nil {
+		log.Println("发帖写入失败:", err)
 		return nil
 	}
 
@@ -124,12 +128,15 @@ func (s *Store) CreateComment(c *models.Comment) (*models.Comment, error) {
 		AuthorID: c.Author.ID,
 	}
 	if err := s.db.Create(&g).Error; err != nil {
+		log.Println("评论写入失败:", err)
 		return nil, err
 	}
 
 	// 3. 帖子的评论数 +1（UpdateColumn 直接改数据库那一列）
-	s.db.Model(&gormPost{}).Where("id = ?", c.PostID).
-		UpdateColumn("comment_count", gorm.Expr("comment_count + 1"))
+	if err := s.db.Model(&gormPost{}).Where("id = ?", c.PostID).
+		UpdateColumn("comment_count", gorm.Expr("comment_count + 1")).Error; err != nil {
+		log.Println("帖子评论数+1失败:", err)
+	}
 
 	// 4. 回填作者，返回建好的评论
 	cc := toComment(&g)
@@ -166,7 +173,9 @@ func (s *Store) ToggleLike(userID, postID int64) (bool, error) {
 	err := s.db.Where("user_id = ? AND post_id = ?", userID, postID).First(&like).Error
 	if err == nil {
 		// 赞过 → 取消：删掉那条点赞记录，赞数 -1
-		s.db.Delete(&like)
+		if delErr := s.db.Delete(&like).Error; delErr != nil {
+			log.Println("取消点赞失败:", delErr)
+		}
 		s.db.Model(&gormPost{}).Where("id = ?", postID).
 			UpdateColumn("like_count", gorm.Expr("like_count - 1"))
 		return false, nil
@@ -174,7 +183,9 @@ func (s *Store) ToggleLike(userID, postID int64) (bool, error) {
 
 	// 3. 没赞过 → 点赞：新增记录，赞数 +1
 	//    (user_id, post_id) 复合唯一索引，数据库层面保证同一个用户对同一帖不会重复点赞
-	s.db.Create(&gormLike{UserID: userID, PostID: postID})
+	if createErr := s.db.Create(&gormLike{UserID: userID, PostID: postID}).Error; createErr != nil {
+		log.Println("点赞写入失败(可能并发重复或数据异常):", createErr)
+	}
 	s.db.Model(&gormPost{}).Where("id = ?", postID).
 		UpdateColumn("like_count", gorm.Expr("like_count + 1"))
 	return true, nil
@@ -207,10 +218,16 @@ func (s *Store) DeletePost(postID int64) error {
 	}
 
 	// 软删帖子：给已删除的行打上 deleted_at 标记（不清数据、可恢复，列表不再显示）
-	s.db.Delete(&gormPost{}, postID)
+	if err := s.db.Delete(&gormPost{}, postID).Error; err != nil {
+		log.Println("软删帖子失败:", err)
+	}
 
 	// 级联：评论和点赞表没有 deleted_at 字段，所以对它们是"真删"
-	s.db.Where("post_id = ?", postID).Delete(&gormComment{})
-	s.db.Where("post_id = ?", postID).Delete(&gormLike{})
+	if err := s.db.Where("post_id = ?", postID).Delete(&gormComment{}).Error; err != nil {
+		log.Println("级联删除评论失败:", err)
+	}
+	if err := s.db.Where("post_id = ?", postID).Delete(&gormLike{}).Error; err != nil {
+		log.Println("级联删除点赞失败:", err)
+	}
 	return nil
 }

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
@@ -33,6 +35,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// 2. 密码哈希：把明文密码变成不可逆的乱码（这是文档硬性要求）
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
+		log.Println("注册-密码哈希失败:", err)
 		response.Error(c, response.StatusInternalServerError, "密码处理失败")
 		return
 	}
@@ -48,6 +51,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// 4. 存入存储，若用户名已存在则返回冲突(409)
 	created, err := h.store.CreateUser(user)
 	if err != nil {
+		// 记下真实原因：是"重名"还是"数据库故障"，日志里能一眼区分
+		log.Println("注册-创建用户失败:", err)
 		response.Error(c, response.StatusConflict, "用户名已存在")
 		return
 	}
@@ -83,6 +88,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// 4. 密码正确，签发 JWT 手环：用用户 ID、学号、角色去生成
 	tokenString, expiresIn, err := jwt.GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
+		log.Println("登录-生成令牌失败:", err)
 		response.Error(c, response.StatusInternalServerError, "令牌生成失败")
 		return
 	}
