@@ -15,6 +15,9 @@ func main() {
 	// 请来领班：创建一个 Gin 引擎（默认已带"日志记录"和"崩溃自动恢复"两个贴心服务）
 	r := gin.Default()
 
+	// 给所有请求统一加上跨域"允许"头（解决网页版 Apifox 的 CORS 拦截）
+	r.Use(middleware.CORS())
+
 	// 定好菜单：当顾客用 GET 方式请求 "/ping" 时，领班带他去这个窗口
 	r.GET("/ping", func(c *gin.Context) {
 		// c 是领班递给你的"顾客上下文"，装着这次请求的全部信息
