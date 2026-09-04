@@ -10,17 +10,17 @@ import (
 	"forum/store"
 )
 
-// PostHandler 处理"帖子与评论"相关的接口
+// PostHandler 处理帖子与评论相关接口
 type PostHandler struct {
 	store *store.Store
 }
 
-// NewPostHandler 创建一个帖子处理器，注入仓库
+// NewPostHandler 创建帖子处理器，注入仓库
 func NewPostHandler(s *store.Store) *PostHandler {
 	return &PostHandler{store: s}
 }
 
-// currentUser 从 token 里取出当前登录用户，多个接口复用
+// currentUser 从 token 取当前登录用户，多个接口复用
 func (h *PostHandler) currentUser(c *gin.Context) *models.User {
 	userID, ok := c.Get("userID")
 	if !ok {
@@ -33,8 +33,7 @@ func (h *PostHandler) currentUser(c *gin.Context) *models.User {
 	return h.store.GetUserByID(id)
 }
 
-// Create 发布帖子：POST /api/v1/posts
-// 作者必须从 JWT 拿，禁止请求体传 user_id（文档要求）
+// Create 发布帖子：POST /api/v1/posts，作者必须从 JWT 取，禁止请求体传 user_id
 func (h *PostHandler) Create(c *gin.Context) {
 	user := h.currentUser(c)
 	if user == nil {
@@ -76,7 +75,7 @@ func (h *PostHandler) List(c *gin.Context) {
 	})
 }
 
-// Get 获取帖子详情：GET /api/v1/posts/:post_id（带上它的评论）
+// Get 帖子详情：GET /api/v1/posts/:post_id（带上评论）
 func (h *PostHandler) Get(c *gin.Context) {
 	postID, err := strconv.ParseInt(c.Param("post_id"), 10, 64)
 	if err != nil || postID < 1 {
@@ -135,36 +134,31 @@ func (h *PostHandler) CreateComment(c *gin.Context) {
 }
 
 // Delete 删除自己的帖子：DELETE /api/v1/posts/:post_id
-// 只能删"你这个作者"发的帖子；别人的帖子 → 403（删别人的统一走 ⑦ 管理员接口）
 func (h *PostHandler) Delete(c *gin.Context) {
-	// 1. 没登录不让删
 	user := h.currentUser(c)
 	if user == nil {
 		response.Error(c, response.StatusUnauthorized, "未登录或令牌无效")
 		return
 	}
 
-	// 2. 路径里的帖子 ID 必须是合法数字
 	postID, err := strconv.ParseInt(c.Param("post_id"), 10, 64)
 	if err != nil || postID < 1 {
 		response.Error(c, response.StatusBadRequest, "参数校验失败")
 		return
 	}
 
-	// 3. 帖子得存在才谈得上删
 	post := h.store.GetPostByID(postID)
 	if post == nil {
 		response.Error(c, response.StatusNotFound, "帖子不存在")
 		return
 	}
 
-	// 4. 权限：这个帖子的作者必须是"你"，否则就是删别人的 → 403
+	// 权限：帖子作者必须是当前用户，否则 403
 	if post.Author.ID != user.ID {
 		response.Error(c, response.StatusForbidden, "无权删除他人的帖子")
 		return
 	}
 
-	// 5. 上面已确认帖子存在，级联删帖不会出错；文档要求成功时 data 为 null
 	_ = h.store.DeletePost(postID)
 	response.Success(c, response.StatusOK, nil)
 }

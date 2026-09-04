@@ -1,7 +1,6 @@
 package models
 
-// LikeToggleResult ⑧ 点赞接口的返回：当前这个帖子的点赞状态
-// 注意字段叫 is_liked（跟 ⑩ 的 liked 不同）
+// LikeToggleResult ⑧ 点赞接口返回：当前帖子的点赞状态
 type LikeToggleResult struct {
 	PostID  int64 `json:"post_id"`
 	IsLiked bool  `json:"is_liked"`

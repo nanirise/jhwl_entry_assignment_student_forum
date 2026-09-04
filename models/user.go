@@ -1,10 +1,10 @@
 package models
 
-// User 用户档案卡：定义"一个用户长什么样"
+// User 用户档案
 type User struct {
-	ID       int64  `json:"id"`       // 用户 ID
-	Username string `json:"username"` // 学号或工号，纯数字
+	ID       int64  `json:"id"`
+	Username string `json:"username"` // 学号/工号，纯数字
 	Name     string `json:"name"`     // 姓名
-	Role     string `json:"role"`     // 角色：student / admin
-	Password string `json:"-"`        // 密码（哈希后），json:"-" 表示永远不输出到 JSON
+	Role     string `json:"role"`     // student / admin
+	Password string `json:"-"`        // 密码(哈希)：json:"-" 保证永不输出到响应
 }
