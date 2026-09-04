@@ -6,19 +6,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CORS 解决跨域：网页版 Apifox 在浏览器里跑，请求会触发浏览器的跨域限制。
-// 这里统一在响应头里告诉浏览器"我允许你访问"，并处理它先发来的 OPTIONS 预检请求。
+// CORS 解决跨域：网页版 Apifox 在浏览器里跑，请求会触发浏览器的"同源限制"。
+// 关键在"预检谈判"：浏览器真正请求前会先发一个 OPTIONS，列出它这次想带的请求头，
+// 服务器必须回"你带的这些我全都放行"；否则浏览器就判 CORS 拒绝。
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 允许任意来源访问。咱们用 Authorization(Bearer token) 来鉴权，不依赖 Cookie，
-		// 所以用 *（全部来源）是安全的；若以后要支持带 Cookie 的跨域，就不能用 *。
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		// 允许前端请求时带的这两个头：请求体格式 + 登录令牌
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// 1. 允许的来源：把浏览器带来的 Origin 原样回给它（而不是写死 *）。
+		//    无论 Apifox 网页从哪个地址来，都能被放行；同时放行带凭据(如 Cookie)的请求。
+		origin := c.GetHeader("Origin")
+		if origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Vary", "Origin")
+		} else {
+			// 没带 Origin（比如 curl 直连）时，就用 * 兜底。
+			c.Header("Access-Control-Allow-Origin", "*")
+		}
 
-		// 浏览器在真正发请求前，会先发一个 OPTIONS 预检试探一下。
-		// 这里直接回 204(无内容)并中断，不再进业务逻辑；业务接口本身不处理 OPTIONS。
+		// 2. 允许的请求方法
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
+		// 3. 允许的请求头：核心修复！不再猜它用哪几个头——预检里浏览器申请了哪些，
+		//    就原样回哪些，"你带什么我就放行什么"，绝不会因为漏了某个自定义头而拦截。
+		reqHeaders := c.GetHeader("Access-Control-Request-Headers")
+		if reqHeaders != "" {
+			c.Header("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		}
+
+		// 预检请求 OPTIONS 本身：回 204(无内容)并中断，不再进业务逻辑。
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
