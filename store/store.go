@@ -2,261 +2,215 @@ package store
 
 import (
 	"fmt"
-	"sort"
-	"sync"
-	"time"
 
 	"forum/models"
+	"gorm.io/gorm"
 )
 
-// Store 简单的内存存储：专门负责"存数据、找数据"
-// 现在用内存(memory)保存，后续 Day7 再换成数据库(Gorm)，但接口保持一致
+// Store 仓储：这次换成真·MySQL 当"仓库"，用 Gorm 查询。
+// 对外方法的名字、参数、返回值都不变（"换心不换脸"），所以 handler 一个字都不用改。
 type Store struct {
-	// 用 map 存用户：把 username 当"钥匙"，存对应的 User
-	// map 是 Go 的"键值对字典"，类比"用学号查人"
-	users map[string]*models.User
-	// 下一个要分配的 user ID，从 10001 开始（文档示例用户 ID 是这个）
-	userSeq int64
-
-	// 帖子货架：把帖子 ID 当"钥匙"，存对应的 Post
-	posts map[int64]*models.Post
-	// 下一个帖子 ID，从 20001 开始（文档示例帖子 ID 是这个）
-	postSeq int64
-
-	// 评论货架：钥匙是帖子 ID，值是"这个帖子的一列评论"
-	comments map[int64][]*models.Comment
-	// 下一个评论 ID，从 30001 开始（文档示例评论 ID 是这个）
-	commentSeq int64
-
-	// 点赞货架：钥匙是用户 ID，值是"这个用户点过哪些帖子"的小字典
-	// 相当于：谁(用户ID) → {哪个帖(帖子ID) → 赞没赞}
-	likes map[int64]map[int64]bool
-
-	// 互斥锁：防止多人同时操作导致数据冲突（类比"同一个人不能同时拿两份"）
-	mu sync.Mutex
+	db *gorm.DB // 通行证：所有查库动作都叫它去干
 }
 
-// New 创建并初始化一个存储实例
-func New() *Store {
-	return &Store{
-		users:   make(map[string]*models.User),
-		userSeq: 10000, // 起始 ID，第一个用户是 10001
-
-		posts:   make(map[int64]*models.Post),
-		postSeq: 20000, // 帖子 ID 从 20001 开始
-
-		comments:   make(map[int64][]*models.Comment),
-		commentSeq: 30000, // 评论 ID 从 30001 开始
-
-		likes: make(map[int64]map[int64]bool), // 点赞货架一开始是空的
-	}
+// New 创建仓储：传入连好库的 *gorm.DB（在 main 里先 store.Connect 再传进来）
+func New(db *gorm.DB) *Store {
+	return &Store{db: db}
 }
 
-// GetUserByUsername 按 username 查找用户；不存在返回 nil
+// GetUserByUsername 按学号查用户；查不到返回 nil
 func (s *Store) GetUserByUsername(username string) *models.User {
-	// 加锁，避免并发读写冲突
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.users[username]
-}
-
-// GetUserByID 按用户 ID 查找用户；不存在返回 nil
-// 因为 map 是按 username 存的，所以这里需要遍历找出 ID 匹配的用户
-func (s *Store) GetUserByID(id int64) *models.User {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// 遍历 map 里所有用户，找到 ID 匹配的那一个
-	for _, u := range s.users {
-		if u.ID == id {
-			return u
-		}
+	var g gormUser
+	// First = 取"第一条"。没查到会返回 err，我们把它当"不存在"处理，返回 nil
+	if err := s.db.Where("username = ?", username).First(&g).Error; err != nil {
+		return nil
 	}
-	return nil // 没找到
+	return toUser(&g)
 }
 
-// CreateUser 创建一个新用户，返回创建好的用户（含分配好的 ID 和哈希后的密码）
-// 如果用户名已存在，返回错误
-func (s *Store) CreateUser(u *models.User) (*models.User, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// GetUserByID 按用户 ID 查用户；查不到返回 nil
+func (s *Store) GetUserByID(id int64) *models.User {
+	var g gormUser
+	if err := s.db.First(&g, id).Error; err != nil {
+		return nil
+	}
+	return toUser(&g)
+}
 
-	// 检查用户名是否已存在
-	if _, exists := s.users[u.Username]; exists {
+// CreateUser 创建新用户；用户名已存在返回错误（调用方据此返回 409）
+func (s *Store) CreateUser(u *models.User) (*models.User, error) {
+	// 1. 先数一下库里有没有同名的：Count 统计条数
+	var count int64
+	s.db.Model(&gormUser{}).Where("username = ?", u.Username).Count(&count)
+	if count > 0 {
 		return nil, fmt.Errorf("用户名已存在")
 	}
 
-	// 分配唯一的用户 ID 并自增
-	s.userSeq++
-	u.ID = s.userSeq
+	// 2. 组装数据库卡：注意密码(Password)在 handler 里已经哈希过了，这里直接存
+	g := gormUser{
+		Username: u.Username,
+		Name:     u.Name,
+		Password: u.Password,
+		Role:     u.Role,
+	}
 
-	// 存进字典
-	s.users[u.Username] = u
-	return u, nil
+	// 3. Create = 插入一行；Gorm 自动把 ID、CreatedAt、UpdatedAt 填进 g
+	if err := s.db.Create(&g).Error; err != nil {
+		return nil, err
+	}
+	return toUser(&g), nil
 }
 
-// now 返回当前时间的标准格式字符串，例如 2026-09-03T12:00:00+08:00
-// 这个格式叫 RFC3339，前端和时间库都认
-func now() string {
-	return time.Now().Format(time.RFC3339)
-}
-
-// CreatePost 建一个帖子：接收正文 + 作者，自己完成"编号 + 记时间 + 上架"
-// 仓库不关心外面发生了什么，只管"给我料，我入库"
+// CreatePost 发一个帖子，返回建好的帖子（含作者）
 func (s *Store) CreatePost(content string, author *models.User) *models.Post {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 发新台号：第一个帖子是 20001
-	s.postSeq++
-	post := &models.Post{
-		ID:        s.postSeq,
-		Content:   content,
-		Author:    author,
-		CreatedAt: now(), // 记下当前时间
+	g := gormPost{
+		Content:  content,
+		AuthorID: author.ID,
+	}
+	if err := s.db.Create(&g).Error; err != nil {
+		return nil
 	}
 
-	// 按帖子 ID 当钥匙，放上货架
-	s.posts[post.ID] = post
-	return post
+	// 作者直接用传进来的（我们知道发帖人是谁），省一次查库
+	p := toPost(&g)
+	p.Author = author
+	return p
 }
 
-// GetPostByID 按帖子 ID 找帖子；找不到返回 nil
+// GetPostByID 按帖子 ID 找帖子（带上作者）；找不到返回 nil
 func (s *Store) GetPostByID(id int64) *models.Post {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.posts[id]
+	var g gormPost
+	// Preload("Author") = 把"作者"这张关联卡一起查出，塞进 g.Author
+	if err := s.db.Preload("Author").First(&g, id).Error; err != nil {
+		return nil
+	}
+	return toPost(&g)
 }
 
-// ListPosts 分页取帖子列表：按发布时间倒序（最新在最上面）
-// 返回：当前这一页的帖子 + 帖子总数（总数给前端算共几页用）
+// ListPosts 分页取帖子列表，按发布时间倒序（最新在最上面）
 func (s *Store) ListPosts(page, pageSize int) ([]*models.Post, int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// 1. 总数：Count 数"还剩多少帖"（软删除的会被 Gorm 自动排除）
+	var total int64
+	s.db.Model(&gormPost{}).Count(&total)
 
-	// 把货架上所有帖子装进一个切片
-	posts := make([]*models.Post, 0, len(s.posts))
-	for _, p := range s.posts {
-		posts = append(posts, p)
+	// 2. 取这一页：倒序 + 跳过前面若干条(offset) + 只要 pageSize 条(limit)
+	var list []gormPost
+	s.db.Preload("Author").
+		Order("created_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&list)
+
+	// 3. 把一堆"数据库卡"翻译成"商品卡"装进切片
+	posts := make([]*models.Post, 0, len(list))
+	for i := range list {
+		posts = append(posts, toPost(&list[i]))
 	}
-
-	// 按时间倒序排。created_at 全是同一格式(RFC3339)，字符串比较就是时间比较
-	sort.Slice(posts, func(i, j int) bool {
-		return posts[i].CreatedAt > posts[j].CreatedAt
-	})
-
-	total := len(posts)
-
-	// 算出这一页的起止下标：起点 = (第几页-1)*每页条数
-	start := (page - 1) * pageSize
-	if start >= total {
-		return []*models.Post{}, total // 超出范围，返回空页
-	}
-	end := start + pageSize
-	if end > total {
-		end = total // 最后一页可能不满，收拢到末尾
-	}
-	return posts[start:end], total
+	return posts, int(total)
 }
 
-// CreateComment 在指定帖子下发一条评论：帖子评论数 +1，并存下这条评论
-// 帖子不存在时返回错误（调用方据此返回 404）
+// CreateComment 在指定帖子下发评论；帖子不存在返回错误（调用方据此返回 404）
 func (s *Store) CreateComment(c *models.Comment) (*models.Comment, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 先确认帖子在不在，不在直接报错
-	post := s.posts[c.PostID]
-	if post == nil {
+	// 1. 确认帖子在不在
+	var post gormPost
+	if err := s.db.First(&post, c.PostID).Error; err != nil {
 		return nil, fmt.Errorf("帖子不存在")
 	}
 
-	// 发新评论号、记时间，塞进该帖子的评论列
-	s.commentSeq++
-	c.ID = s.commentSeq
-	c.CreatedAt = now()
-	s.comments[c.PostID] = append(s.comments[c.PostID], c)
+	// 2. 插入评论
+	g := gormComment{
+		PostID:   c.PostID,
+		Content:  c.Content,
+		AuthorID: c.Author.ID,
+	}
+	if err := s.db.Create(&g).Error; err != nil {
+		return nil, err
+	}
 
-	post.CommentCount++ // 帖子的评论数 +1
-	return c, nil
+	// 3. 帖子的评论数 +1（UpdateColumn 直接改数据库那一列）
+	s.db.Model(&gormPost{}).Where("id = ?", c.PostID).
+		UpdateColumn("comment_count", gorm.Expr("comment_count + 1"))
+
+	// 4. 回填作者，返回建好的评论
+	cc := toComment(&g)
+	cc.Author = c.Author
+	return cc, nil
 }
 
 // GetCommentsByPostID 取某个帖子的所有评论（按发布顺序，即创建时间正序）
-// 返回一份副本，避免外部拿到内部切片后并发改出问题
 func (s *Store) GetCommentsByPostID(postID int64) []*models.Comment {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var list []gormComment
+	s.db.Preload("Author").
+		Where("post_id = ?", postID).
+		Order("created_at ASC").
+		Find(&list)
 
-	list := s.comments[postID]
-	r := make([]*models.Comment, len(list))
-	copy(r, list)
-	return r
+	comments := make([]*models.Comment, 0, len(list))
+	for i := range list {
+		comments = append(comments, toComment(&list[i]))
+	}
+	return comments
 }
 
-// ToggleLike 点赞开关：原本没赞 → 点赞，原本赞了 → 取消
-// 返回：(切换后的点赞状态, 错误)。帖子不存在时报错（调用方据此返回 404）
+// ToggleLike 点赞开关：原本没赞 → 点赞，原本赞了 → 取消。
+// 帖子不存在返回错误（调用方据此返回 404）。
 func (s *Store) ToggleLike(userID, postID int64) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 帖子不在，直接报错，别点了再发现点了个寂寞
-	if s.posts[postID] == nil {
+	// 1. 帖子得存在，才谈得上赞它
+	var post gormPost
+	if err := s.db.First(&post, postID).Error; err != nil {
 		return false, fmt.Errorf("帖子不存在")
 	}
 
-	// 如果这个用户还没有自己的"点赞字典"，先给他开一个空字典
-	if s.likes[userID] == nil {
-		s.likes[userID] = make(map[int64]bool)
+	// 2. 查这个用户赞没赞过这个帖
+	var like gormLike
+	err := s.db.Where("user_id = ? AND post_id = ?", userID, postID).First(&like).Error
+	if err == nil {
+		// 赞过 → 取消：删掉那条点赞记录，赞数 -1
+		s.db.Delete(&like)
+		s.db.Model(&gormPost{}).Where("id = ?", postID).
+			UpdateColumn("like_count", gorm.Expr("like_count - 1"))
+		return false, nil
 	}
 
-	// 取出当前状态：这个用户现在赞没赞这个帖
-	current := s.likes[userID][postID]
-	// 取反：false→true(现在赞了)，true→false(现在取消了)
-	s.likes[userID][postID] = !current
-
-	// 把帖子上贴的那个"点赞数"同步一下：之前没赞→现在赞了，+1；之前赞了→现在取消，-1
-	if !current {
-		s.posts[postID].LikeCount++
-	} else {
-		s.posts[postID].LikeCount--
-	}
-
-	return !current, nil
+	// 3. 没赞过 → 点赞：新增记录，赞数 +1
+	//    (user_id, post_id) 复合唯一索引，数据库层面保证同一个用户对同一帖不会重复点赞
+	s.db.Create(&gormLike{UserID: userID, PostID: postID})
+	s.db.Model(&gormPost{}).Where("id = ?", postID).
+		UpdateColumn("like_count", gorm.Expr("like_count + 1"))
+	return true, nil
 }
 
-// GetLikeStatus 批量查"当前用户对一堆帖子"的点赞状态
-// 返回切片，每项 = {帖子ID, 赞没赞}；没赞或帖子不存在都记 false
+// GetLikeStatus 批量查"当前用户对一堆帖子"的点赞状态；没赞或不存在都记 false
 func (s *Store) GetLikeStatus(userID int64, postIDs []int64) []models.LikeStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// 一次性把这批帖里"userID 赞过的"都捞出来
+	var likes []gormLike
+	s.db.Where("user_id = ? AND post_id IN ?", userID, postIDs).Find(&likes)
+
+	// 把"赞过的帖子ID"放进一个集合，方便 O(1) 判断
+	likedSet := make(map[int64]bool)
+	for _, l := range likes {
+		likedSet[l.PostID] = true
+	}
 
 	result := make([]models.LikeStatus, 0, len(postIDs))
 	for _, pid := range postIDs {
-		liked := false
-		// 只有用户的点赞字典里真的记着这个帖，才算赞了
-		if m, ok := s.likes[userID]; ok {
-			liked = m[pid]
-		}
-		result = append(result, models.LikeStatus{PostID: pid, Liked: liked})
+		result = append(result, models.LikeStatus{PostID: pid, Liked: likedSet[pid]})
 	}
 	return result
 }
 
-// DeletePost 删除帖子：帖子本身 + 它的评论 + 所有用户对它的点赞，一次性全删（级联删）
+// DeletePost 删除帖子：帖子(软删) + 级联硬删它的评论和点赞记录
 func (s *Store) DeletePost(postID int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.posts[postID] == nil {
+	var post gormPost
+	if err := s.db.First(&post, postID).Error; err != nil {
 		return fmt.Errorf("帖子不存在")
 	}
 
-	delete(s.posts, postID)    // 删掉帖子卡片本身
-	delete(s.comments, postID) // 级联：删掉它下面这一整列评论
+	// 软删帖子：给已删除的行打上 deleted_at 标记（不清数据、可恢复，列表不再显示）
+	s.db.Delete(&gormPost{}, postID)
 
-	// 级联：遍历所有用户的点赞字典，把这个帖子的点赞记录也一并删掉
-	for _, userLikes := range s.likes {
-		delete(userLikes, postID)
-	}
-
+	// 级联：评论和点赞表没有 deleted_at 字段，所以对它们是"真删"
+	s.db.Where("post_id = ?", postID).Delete(&gormComment{})
+	s.db.Where("post_id = ?", postID).Delete(&gormLike{})
 	return nil
 }

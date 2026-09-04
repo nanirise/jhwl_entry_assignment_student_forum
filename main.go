@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 
+	"forum/config"
 	"forum/handler"
 	"forum/middleware"
 	"forum/models"
@@ -56,8 +57,22 @@ func main() {
 
 		response.Success(c, response.StatusCreated, post)
 	})
-	// 开食堂的"仓库大厅"：把用户等数据存进去
-	myStore := store.New()
+	// 加载配置：数据库地址等从 config.yaml / config.local.yaml（密码在后者）读进来
+	cfg := config.Load()
+
+	// 连上 MySQL 数据库；连不上直接退出（错误会打在日志里，方便排查）
+	db, err := store.Connect(cfg)
+	if err != nil {
+		panic("连接数据库失败: " + err.Error())
+	}
+
+	// 让 Gorm 照着四张"卡片"把表自动建好（表已存在会跳过，重复跑也安全）
+	if err := store.Migrate(db); err != nil {
+		panic("建表失败: " + err.Error())
+	}
+
+	// 开食堂的"仓库大厅"：把连好库的 db 交进去，数据从此存进 MySQL，重启也在
+	myStore := store.New(db)
 
 	// 创建"前台领班"（鉴权处理器），并把仓库交给他
 	authHandler := handler.NewAuthHandler(myStore)

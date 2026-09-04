@@ -1,0 +1,7 @@
+# 本文件会提交到 GitHub（不含密码）
+# 真正的密码放在本地私有文件 config.local.yaml（已被 .gitignore 忽略）
+db:
+  host: 127.0.0.1
+  port: "3306"
+  user: root
+  name: forum
